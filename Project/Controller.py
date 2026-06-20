@@ -7,6 +7,15 @@ from datetime  import datetime
 import json
 import os
 import keyring
+import keyring.backends.Windows
+
+# Im gepackten (noconsole) Build steht keyrings Backend-Auto-Discovery nicht
+# zur Verfügung → Windows Credential Manager explizit setzen, damit das Speichern
+# der Zugangsdaten auch in der Exe funktioniert.
+try:
+    keyring.set_keyring(keyring.backends.Windows.WinVaultKeyring())
+except Exception:
+    pass
 
 from Project.OAuth.oauth_listener_runner import OAuthListenerRunner
 from Project.OAuth.OAuth_generate_pkce_pair import generate_pkce_pair
