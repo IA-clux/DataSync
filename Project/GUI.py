@@ -5,6 +5,7 @@ import tkinter      as tk
 import tkinter.font as tkfont
 from   tkinter      import scrolledtext
 from   tkinter      import ttk
+from   tkinter      import filedialog
 import ctypes
 from   ctypes       import wintypes
 from   datetime     import datetime
@@ -148,11 +149,11 @@ class GUI:
         ).grid(column=0, row=1, sticky="w")
 
         self.tk_username = tk.StringVar(
-            value=self.controller.SETTINGS.get("username", "")
+            value=self.controller.get_credential("username")
         )
         self.tk_username.trace_add(
             "write",
-            lambda *_: self._store_setting("username", self.tk_username.get())
+            lambda *_: self.controller.set_credential("username", self.tk_username.get())
         )
 
         self.username_entry = tk.Entry(
@@ -177,11 +178,11 @@ class GUI:
         ).grid(column=0, row=3, sticky="w")
 
         self.tk_password = tk.StringVar(
-            value=self.controller.SETTINGS.get("password", "")
+            value=self.controller.get_credential("password")
         )
         self.tk_password.trace_add(
             "write",
-            lambda *_: self._store_setting("password", self.tk_password.get())
+            lambda *_: self.controller.set_credential("password", self.tk_password.get())
         )
 
         self.password_entry = tk.Entry(
@@ -234,14 +235,15 @@ class GUI:
         self.body.grid(column=0,row=0,sticky="nsew")
 
         self.body.columnconfigure(0, weight=100)
-        # Bei zusätzlichem vertikalem Platz wächst der Log (Zeile 2), nicht der
+        # Bei zusätzlichem vertikalem Platz wächst der Log (Zeile 3), nicht der
         # ansonsten fast leere Fortschritts-Bereich.
-        self.body.rowconfigure(2, weight=100)
+        self.body.rowconfigure(3, weight=100)
 
         self._build_credentials_frame()
+        self._build_db_options_frame()
 
         self.force_update_btn = tk.Button(self.body, bg = "#40FF40",activebackground = "#40FF40", text = "Jetzt Updaten", command = self.controller.update_now)
-        self.force_update_btn.grid(column=0,row=1,sticky="n", pady=(10, 0),padx=10)
+        self.force_update_btn.grid(column=0,row=2,sticky="n", pady=(10, 0),padx=10)
 
         def _on_mousewheel(event):
             event.widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -255,13 +257,78 @@ class GUI:
 
         # ~20 px über und unter dem Log trennen ihn sauber von Button und Fortschritt.
         # sticky="nsew" + Zeilengewicht: der Log nimmt zusätzlichen Platz auf.
-        self.error_msg.grid(column=0, row=2, sticky="nsew", pady=20, padx=10)
+        self.error_msg.grid(column=0, row=3, sticky="nsew", pady=20, padx=10)
+
+    def _build_db_options_frame(self):
+        """Optionaler lokaler Datenbank-Abzug: Checkbox + frei wählbarer Ablageort."""
+        self.db_frame = tk.Frame(self.body, bg="white")
+        self.db_frame.grid(column=0, row=1, sticky="n", padx=10, pady=(8, 0))
+        self.db_frame.columnconfigure(0, weight=1)
+
+        self.tk_db_enabled = tk.BooleanVar(
+            value=bool(self.controller.SETTINGS.get("db_enabled", False))
+        )
+        self.tk_db_enabled.trace_add("write", lambda *_: self._on_db_enabled_changed())
+
+        self.db_check = tk.Checkbutton(
+            self.db_frame,
+            text="Lokalen Datenbank-Abzug speichern",
+            variable=self.tk_db_enabled,
+            bg="white",
+            activebackground="white",
+            anchor="w",
+        )
+        self.db_check.grid(column=0, row=0, sticky="w")
+
+        self.db_path_lbl = tk.Label(
+            self.db_frame,
+            bg="white",
+            fg="#555555",
+            anchor="w",
+            justify="left",
+            wraplength=210,
+        )
+        self.db_path_lbl.grid(column=0, row=1, sticky="w", pady=(4, 0))
+
+        self.db_path_btn = tk.Button(
+            self.db_frame,
+            text="Ablageort wählen…",
+            command=self._choose_db_path,
+        )
+        self.db_path_btn.grid(column=0, row=2, sticky="w", pady=(4, 0))
+
+        self._refresh_db_path_label()
+        self._update_db_widgets_state()
+
+    def _on_db_enabled_changed(self):
+        self.controller.SETTINGS["db_enabled"] = bool(self.tk_db_enabled.get())
+        self.controller.save_settings()
+        self._update_db_widgets_state()
+
+    def _choose_db_path(self):
+        path = filedialog.askdirectory(
+            title="Ablageort für den Datenbank-Abzug wählen"
+        )
+        if path:
+            self.controller.SETTINGS["db_path"] = path
+            self.controller.save_settings()
+            self._refresh_db_path_label()
+
+    def _refresh_db_path_label(self):
+        path = self.controller.SETTINGS.get("db_path", "")
+        self.db_path_lbl.config(
+            text=f"Ablageort: {path}" if path else "Kein Ablageort gewählt"
+        )
+
+    def _update_db_widgets_state(self):
+        state = "normal" if self.tk_db_enabled.get() else "disabled"
+        self.db_path_btn.config(state=state)
 
     def _build_progress_frame(self):
 
         # Container
         self.progress_frame = tk.Frame(self.body, bg = "white")
-        self.progress_frame.grid(column = 0, row = 3, sticky = "nsew", padx = 10, pady = (0, 10))
+        self.progress_frame.grid(column = 0, row = 4, sticky = "nsew", padx = 10, pady = (0, 10))
         self.progress_frame.columnconfigure(0, weight = 1)
 
         # Aktueller Zwischenschritt
@@ -354,6 +421,11 @@ class GUI:
             self.force_update_btn.config(state = state)
             for entry in (self.username_entry, self.password_entry, self.organisation_entry):
                 entry.config(state = state)
+            self.db_check.config(state = state)
+            if busy:
+                self.db_path_btn.config(state = "disabled")
+            else:
+                self._update_db_widgets_state()
         self._ui(_do)
 
     def reset_progress(self):
@@ -369,7 +441,7 @@ class GUI:
     def _build_footer(self):
 
         self.footer = tk.Frame(self.body, bg="#575757", bd=2, relief = "sunken")
-        self.footer.grid(column=0,row=4,sticky="nsew", padx = 0, pady = 0)
+        self.footer.grid(column=0,row=5,sticky="nsew", padx = 0, pady = 0)
 
         last_updated = self.controller.SETTINGS["last_updated"]
         if not last_updated:

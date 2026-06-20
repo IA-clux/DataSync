@@ -402,7 +402,8 @@ def push_to_sharepoint(controller, data: dict):
         sp_client.upsert_endpoint(
             data[endpoint],
             endpoint=endpoint,
-            progress_callback=controller.gui.set_progress
+            progress_callback=controller.gui.set_progress,
+            status_callback=controller.gui.set_status
         )
 
         # Endpoint abgeschlossen (auch wenn es nichts zu senden gab → 100 %)
