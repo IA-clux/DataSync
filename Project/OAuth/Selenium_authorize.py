@@ -56,6 +56,9 @@ def selenium_oauth_login(
 
     Erfolg = Redirect ausgelöst
     Token-Verarbeitung erfolgt NICHT hier!
+
+    `log` ist ein Callable(str), das Fehlermeldungen thread-sicher
+    in die Frontend-Anzeige schreibt (z. B. GUI.append_error).
     """
 
     driver = setup_driver(debug_mode=debug_mode)
@@ -93,7 +96,7 @@ def selenium_oauth_login(
         )
 
         if result.get_attribute("id") == "error-element-organizationName":
-            log_normal(log, f"Falscher Organisationsname: {organisation}")
+            log(f"Falscher Organisationsname: {organisation}")
             raise RuntimeError("Organisation ungültig")
 
         # -------------------------------------------------
@@ -117,11 +120,11 @@ def selenium_oauth_login(
         # ✅ Bis hierher: Login erfolgreich & Redirect ausgelöst
 
     except TimeoutException:
-        log_normal(log, "Timeout beim OAuth-Login")
+        log("Timeout beim OAuth-Login")
         raise
 
     except Exception as e:
-        log_normal(log, f"Selenium OAuth Fehler: {e}")
+        log(f"Selenium OAuth Fehler: {e}")
         raise
 
     finally:
@@ -129,13 +132,3 @@ def selenium_oauth_login(
         # 5) Browser immer sauber schließen
         # -------------------------------------------------
         driver.quit()
-
-
-# ---------------------------------------------------------
-# Logging Helper
-# ---------------------------------------------------------
-
-def log_normal(log_widget, message: str) -> None:
-    log_widget.config(state="normal")
-    log_widget.insert("end", message + "\n")
-    log_widget.config(state="disabled")

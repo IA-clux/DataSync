@@ -1,1 +1,10 @@
 .env
+Project/OAuth/certs/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller build artifacts
+build/
+dist/

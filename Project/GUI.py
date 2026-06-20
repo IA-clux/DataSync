@@ -16,19 +16,20 @@ class GUI:
     def __init__(
         self,
         controller,
-        height: int = 600,
-        width: int  = 250
+        width: int = 250
     ):
         self.controller = controller
 
-        self.height = height
-        self.width  = width
+        self.width = width
 
         self._build_root()
         self._build_body()
         self._build_progress_frame()
         self._build_footer()
         self._build_tray_icon()
+
+        # Fenstergröße/-position erst nach dem Aufbau am echten Platzbedarf ausrichten
+        self._apply_geometry()
 
         self.root.withdraw()
         self.window_visible = False
@@ -77,18 +78,46 @@ class GUI:
 
         self.root.config(bg="white")
 
-        # Root Geometry Settings
-        screenwidth  = self.root.winfo_screenwidth()
-        screenheight = self.root.winfo_screenheight()
-        taskbar_height = get_taskbar_height()
-        self.root.geometry(f"{self.width}x{self.height}+{screenwidth-self.width-10}+{screenheight - self.height - taskbar_height - 10}")
+        # Breite ist fix; Höhe und Position werden in _apply_geometry aus dem
+        # tatsächlichen Platzbedarf der Inhalte abgeleitet (vorerst nur Platzhalter).
+        self._taskbar_height = get_taskbar_height()
+        self.root.geometry(f"{self.width}x1")
         self.root.overrideredirect(True)
 
         self.root.bind("<FocusOut>", self._on_focus_out)
 
         self.root.rowconfigure(0, weight = 100)
         self.root.columnconfigure(0, weight = 1)
-        
+
+    def _apply_geometry(self):
+        """Richtet Höhe und Position am tatsächlichen Platzbedarf der Inhalte aus.
+
+        Die Höhe wird inklusive eingeblendeter Progressbar (Worst Case) gemessen,
+        damit das spätere Ein-/Ausblenden das Layout nicht sprengt.
+        """
+        # Worst-Case-Layout für die Messung herstellen (Balken sichtbar)
+        self.progress_bar.grid()
+        self.progress_pct_lbl.grid()
+
+        self.root.update_idletasks()
+        needed_height = self.root.winfo_reqheight()
+
+        # Zurück in den Ausgangszustand (Balken wieder ausgeblendet)
+        self.progress_bar.grid_remove()
+        self.progress_pct_lbl.grid_remove()
+
+        screenwidth  = self.root.winfo_screenwidth()
+        screenheight = self.root.winfo_screenheight()
+
+        x = screenwidth  - self.width        - 10
+        y = screenheight - needed_height     - self._taskbar_height - 10
+
+        self.root.geometry(f"{self.width}x{needed_height}+{x}+{y}")
+
+        # Größe fixieren, damit das Ein-/Ausblenden des Balkens keine Sprünge erzeugt
+        self.root.update_idletasks()
+        self.body.grid_propagate(False)
+
     def _build_credentials_frame(self):
         self.credentials_frame = tk.Frame(
             self.body,
@@ -126,16 +155,19 @@ class GUI:
             lambda *_: self._store_setting("username", self.tk_username.get())
         )
 
-        tk.Entry(
+        self.username_entry = tk.Entry(
             self.credentials_frame,
             textvariable=self.tk_username,
             width=28,
             bg="#575757",
             fg="white",
+            disabledbackground="#3a3a3a",
+            disabledforeground="#aaaaaa",
             insertbackground="white",
             bd = 2,
             relief="sunken"
-        ).grid(column=0, row=2, columnspan=2, pady=(0, 8))
+        )
+        self.username_entry.grid(column=0, row=2, columnspan=2, pady=(0, 8))
 
         tk.Label(
             self.credentials_frame,
@@ -152,17 +184,20 @@ class GUI:
             lambda *_: self._store_setting("password", self.tk_password.get())
         )
 
-        tk.Entry(
+        self.password_entry = tk.Entry(
             self.credentials_frame,
             textvariable=self.tk_password,
             width=28,
             bg="#575757",
             fg="white",
+            disabledbackground="#3a3a3a",
+            disabledforeground="#aaaaaa",
             insertbackground="white",
             bd = 2,
             relief="sunken",
             show="*"
-        ).grid(column=0, row=4, columnspan=2, pady=(0, 8))
+        )
+        self.password_entry.grid(column=0, row=4, columnspan=2, pady=(0, 8))
 
         tk.Label(
             self.credentials_frame,
@@ -179,30 +214,34 @@ class GUI:
             lambda *_: self._store_setting("organisation", self.tk_organisation.get())
         )
 
-        tk.Entry(
+        self.organisation_entry = tk.Entry(
             self.credentials_frame,
             textvariable=self.tk_organisation,
             width=28,
             bg="#575757",
             fg="white",
+            disabledbackground="#3a3a3a",
+            disabledforeground="#aaaaaa",
             insertbackground="white",
             bd = 2,
             relief="sunken"
-        ).grid(column=0, row=6, columnspan=2)
+        )
+        self.organisation_entry.grid(column=0, row=6, columnspan=2)
 
     def _build_body(self):
 
         self.body = tk.Frame(self.root, bg="white", bd=2, relief="raised", highlightthickness=2 ,highlightbackground= "#575757")
         self.body.grid(column=0,row=0,sticky="nsew")
-        self.body.grid_propagate(False)
 
         self.body.columnconfigure(0, weight=100)
-        self.body.rowconfigure(3, weight=100)
+        # Bei zusätzlichem vertikalem Platz wächst der Log (Zeile 2), nicht der
+        # ansonsten fast leere Fortschritts-Bereich.
+        self.body.rowconfigure(2, weight=100)
 
         self._build_credentials_frame()
 
         self.force_update_btn = tk.Button(self.body, bg = "#40FF40",activebackground = "#40FF40", text = "Jetzt Updaten", command = self.controller.update_now)
-        self.force_update_btn.grid(column=0,row=1,sticky="n", pady=10,padx=10)
+        self.force_update_btn.grid(column=0,row=1,sticky="n", pady=(10, 0),padx=10)
 
         def _on_mousewheel(event):
             event.widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -214,40 +253,118 @@ class GUI:
         self.error_msg.bind("<Button-4>", lambda e: self.error_msg.yview_scroll(-1, "units"))  # Linux
         self.error_msg.bind("<Button-5>", lambda e: self.error_msg.yview_scroll(1, "units"))   # Linux
 
-        self.error_msg.grid(column=0, row=2, sticky="n", pady=10, padx=10)
+        # ~20 px über und unter dem Log trennen ihn sauber von Button und Fortschritt.
+        # sticky="nsew" + Zeilengewicht: der Log nimmt zusätzlichen Platz auf.
+        self.error_msg.grid(column=0, row=2, sticky="nsew", pady=20, padx=10)
 
     def _build_progress_frame(self):
 
         # Container
         self.progress_frame = tk.Frame(self.body, bg = "white")
-        self.progress_frame.grid(column = 0, row = 3, sticky = "nsew", padx = 10, pady = 10)
+        self.progress_frame.grid(column = 0, row = 3, sticky = "nsew", padx = 10, pady = (0, 10))
+        self.progress_frame.columnconfigure(0, weight = 1)
 
-        # Customer Data Progress Announcement
-        self.customer_progress_lbl = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.customer_progress_lbl.grid(column = 0, row = 0, sticky = "w", padx = 2, pady = 2)
-        self.customer_progress = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.customer_progress.grid(column = 1, row = 0, sticky = "w", padx = 2, pady = 2)
+        # Aktueller Zwischenschritt
+        self.status_lbl = tk.Label(
+            self.progress_frame, bg = "white", fg = "black",
+            text = "", anchor = "w", justify = "left", wraplength = 210
+        )
+        self.status_lbl.grid(column = 0, row = 0, columnspan = 2, sticky = "w", padx = 2, pady = (2, 6))
 
-        # Employees Data Progress Announcement
-        self.employees_progress_lbl = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.employees_progress_lbl.grid(column = 0, row = 1, sticky = "w", padx = 2, pady = 2)
-        self.employees_progress = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.employees_progress.grid(column = 1, row = 1, sticky = "w", padx = 2, pady = 2)
+        # Fortschrittsbalken (nur während Down-/Upload sichtbar)
+        self.progress_bar = ttk.Progressbar(
+            self.progress_frame, orient = "horizontal",
+            length = 180, mode = "determinate", maximum = 100
+        )
+        self.progress_bar.grid(column = 0, row = 1, sticky = "we", padx = 2, pady = 2)
 
-        # Insurances Data Progress Announcement
-        self.insurances_progress_lbl = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.insurances_progress_lbl.grid(column = 0, row = 2, sticky = "w", padx = 2, pady = 2)
-        self.insurances_progress = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.insurances_progress.grid(column = 1, row = 2, sticky = "w", padx = 2, pady = 2)
+        self.progress_pct_lbl = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
+        self.progress_pct_lbl.grid(column = 1, row = 1, sticky = "w", padx = (6, 2), pady = 2)
 
-        # Receipts Data Progress Announcement
-        self.receipts_progress_lbl = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.receipts_progress_lbl.grid(column = 0, row = 3, sticky = "w", padx = 2, pady = 2)
-        self.receipts_progress = tk.Label(self.progress_frame, bg = "white", fg = "black", text = "")
-        self.receipts_progress.grid(column = 1, row = 3, sticky = "w", padx = 2, pady = 2)
+        # Initial ausgeblendet
+        self.progress_bar.grid_remove()
+        self.progress_pct_lbl.grid_remove()
 
+        # Endmeldung
         self.finished_lbl = tk.Label(self.progress_frame, bg = "white", fg = "grey", text = "")
-        self.finished_lbl.grid(column = 0, columnspan=2, row = 4, sticky = "w", padx = 2, pady= 10)
+        self.finished_lbl.grid(column = 0, columnspan = 2, row = 2, sticky = "w", padx = 2, pady = 10)
+
+    # -----------------------------------------------------------------------------
+    # Thread-sichere Fortschritts-/Status-API (aus Worker-Threads aufrufbar)
+    # -----------------------------------------------------------------------------
+
+    def _ui(self, fn):
+        """Führt fn thread-sicher im Tk-Mainloop aus."""
+        self.root.after(0, fn)
+
+    def set_status(self, text: str):
+        self._ui(lambda: self.status_lbl.config(text = text))
+
+    def set_finished(self, text: str):
+        self._ui(lambda: self.finished_lbl.config(text = text))
+
+    def set_progress(self, current: int, total: int):
+        def _do():
+            if total <= 0:
+                return
+            pct = max(0, min(100, int(100 * current / total)))
+            self.progress_bar.grid()
+            self.progress_pct_lbl.grid()
+            self.progress_bar.config(value = pct)
+            self.progress_pct_lbl.config(text = f"{pct}%")
+        self._ui(_do)
+
+    def hide_progress(self):
+        def _do():
+            self.progress_bar.config(value = 0)
+            self.progress_pct_lbl.config(text = "")
+            self.progress_bar.grid_remove()
+            self.progress_pct_lbl.grid_remove()
+        self._ui(_do)
+
+    def show_error(self, message: str):
+        """Ersetzt den Inhalt der Fehleranzeige."""
+        def _do():
+            self.error_msg.config(state = "normal")
+            self.error_msg.delete("1.0", "end")
+            self.error_msg.insert("end", message)
+            self.error_msg.config(state = "disabled")
+        self._ui(_do)
+
+    def append_error(self, message: str):
+        """Hängt eine Zeile an die Fehler-/Loganzeige an."""
+        def _do():
+            self.error_msg.config(state = "normal")
+            self.error_msg.insert("end", message + "\n")
+            self.error_msg.see("end")
+            self.error_msg.config(state = "disabled")
+        self._ui(_do)
+
+    def clear_error(self):
+        def _do():
+            self.error_msg.config(state = "normal")
+            self.error_msg.delete("1.0", "end")
+            self.error_msg.config(state = "disabled")
+        self._ui(_do)
+
+    def set_busy(self, busy: bool):
+        """Sperrt/entsperrt Update-Button und Eingabefelder während des Syncs."""
+        state = "disabled" if busy else "normal"
+        def _do():
+            self.force_update_btn.config(state = state)
+            for entry in (self.username_entry, self.password_entry, self.organisation_entry):
+                entry.config(state = state)
+        self._ui(_do)
+
+    def reset_progress(self):
+        def _do():
+            self.status_lbl.config(text = "")
+            self.finished_lbl.config(text = "")
+            self.progress_bar.config(value = 0)
+            self.progress_pct_lbl.config(text = "")
+            self.progress_bar.grid_remove()
+            self.progress_pct_lbl.grid_remove()
+        self._ui(_do)
 
     def _build_footer(self):
 

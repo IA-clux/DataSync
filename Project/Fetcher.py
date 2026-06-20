@@ -20,7 +20,6 @@ RECEIPTS_PATH              = "/bi/receipts"
 DEFAULT_PAGE_SIZE = 500
 
 def fetch_page(
-    controller: object,
     session: requests.Session,
     endpoint: str,
     token: str,
@@ -28,7 +27,7 @@ def fetch_page(
     page_size: int,
     timeout_s: int = 60,
 ) -> Dict[str, Any]:
-    
+
     url = f"{BASE_URL}{endpoint}"
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -39,30 +38,15 @@ def fetch_page(
         timeout=timeout_s,
     )
 
-    # Token abgelaufen/ungültig (Doku: 401 bei missing/expired token)
-    if resp.status_code == 401: 
-        error_msg = "401 Unauthorized – Token fehlt oder ist abgelaufen. In Postman neu holen."
-        # Response in Frontend anzeigen
-        controller.gui.root.after(0, controller.gui.error_msg.config(state = "normal"))
-        controller.gui.error_msg.insert("end", error_msg)
-        controller.gui.error_msg.config(state = "disabled") 
-        raise ApiError(error_msg)
-    
+    # Fehler werden als ApiError hochgereicht und vom Controller im Frontend angezeigt.
+    if resp.status_code == 401:
+        raise ApiError("401 Unauthorized – Token fehlt oder ist abgelaufen. In Postman neu holen.")
+
     if resp.status_code == 403:
-        error_msg = "403 Forbidden – keine Berechtigung oder falsche Audience/Permissions."
-        # Response in Frontend anzeigen
-        controller.gui.root.after(0, controller.gui.error_msg.config(state = "normal"))
-        controller.gui.error_msg.insert("end", error_msg)
-        controller.gui.error_msg.config(state = "disabled")        
-        raise ApiError(error_msg)
-    
+        raise ApiError("403 Forbidden – keine Berechtigung oder falsche Audience/Permissions.")
+
     if resp.status_code >= 400:
-        error_msg = f"HTTP {resp.status_code}: {resp.text[:500]}"
-        # Response in Frontend anzeigen
-        controller.gui.root.after(0, controller.gui.error_msg.config(state = "normal"))
-        controller.gui.error_msg.insert("end", error_msg)
-        controller.gui.error_msg.config(state = "disabled")
-        raise ApiError(error_msg)
+        raise ApiError(f"HTTP {resp.status_code}: {resp.text[:500]}")
 
     return resp.json()
 
@@ -81,11 +65,10 @@ def fetch_all_items(
 
         while True:
             data = fetch_page(
-                controller = controller,
-                session    = session, 
-                endpoint   = endpoint, 
-                token      = token, 
-                page       = page, 
+                session    = session,
+                endpoint   = endpoint,
+                token      = token,
+                page       = page,
                 page_size  = page_size)
 
             items = data.get("items", [])
@@ -95,15 +78,8 @@ def fetch_all_items(
             total_pages = data.get("totalPages", total_pages)
             current_page = data.get("page", page)
 
-            progress_in_pct = int((100 * current_page) / total_pages)
-            if endpoint == CUSTOMERS_PATH:
-                controller.gui.customer_progress.config(text = f"{progress_in_pct}%")
-            elif endpoint == EMPLOYEES_PATH:
-                controller.gui.employees_progress.config(text = f"{progress_in_pct}%")
-            elif endpoint == INSURANCES_PATH:
-                controller.gui.insurances_progress.config(text = f"{progress_in_pct}%")
-            elif endpoint == RECEIPTS_PATH:
-                controller.gui.receipts_progress.config(text = f"{progress_in_pct}%")
+            if total_pages:
+                controller.gui.set_progress(current_page, total_pages)
 
             print(f"Fetched page {current_page}/{total_pages} — items total: {len(all_items)}")
 
@@ -118,7 +94,7 @@ def fetch_all_items(
     return all_items
 
 def fetch_all_entities(controller, token, page_size = DEFAULT_PAGE_SIZE):
-    controller.gui.customer_progress_lbl.config(text="Lade Kundendaten:")
+    controller.gui.set_status("Lade Kundendaten…")
     customers = fetch_all_items(
         controller=controller,
         endpoint=CUSTOMERS_PATH,
@@ -126,7 +102,7 @@ def fetch_all_entities(controller, token, page_size = DEFAULT_PAGE_SIZE):
         page_size=page_size
     )
 
-    controller.gui.employees_progress_lbl.config(text="Lade Mitarbeiterdaten:")
+    controller.gui.set_status("Lade Mitarbeiterdaten…")
     employees = fetch_all_items(
         controller=controller,
         endpoint=EMPLOYEES_PATH,
@@ -134,14 +110,15 @@ def fetch_all_entities(controller, token, page_size = DEFAULT_PAGE_SIZE):
         page_size=page_size
     )
 
-    customerEmployeeLinks = fetch_all_items(
-        controller= controller,
+    controller.gui.set_status("Lade Mitarbeiter-Zuordnungen…")
+    customer_employee_links = fetch_all_items(
+        controller=controller,
         endpoint=CUSTOMEREMPLOYEELINKS_PATH,
         token=token,
         page_size=page_size
     )
 
-    controller.gui.insurances_progress_lbl.config(text="Lade Kostenträgerdaten:")
+    controller.gui.set_status("Lade Kostenträgerdaten…")
     insurances = fetch_all_items(
         controller=controller,
         endpoint=INSURANCES_PATH,
@@ -149,7 +126,7 @@ def fetch_all_entities(controller, token, page_size = DEFAULT_PAGE_SIZE):
         page_size=page_size
     )
 
-    controller.gui.receipts_progress_lbl.config(text="Lade Belegdaten:")
+    controller.gui.set_status("Lade Belegdaten…")
     receipts = fetch_all_items(
         controller=controller,
         endpoint=RECEIPTS_PATH,
@@ -158,11 +135,11 @@ def fetch_all_entities(controller, token, page_size = DEFAULT_PAGE_SIZE):
     )
 
     return {
-        "customers":             customers,
-        "employees":             employees,
-        "customerEmployeeLinks": customerEmployeeLinks,
-        "insurances":            insurances,
-        "receipts":              receipts,
+        "customers":               customers,
+        "employees":               employees,
+        "customer_employee_links": customer_employee_links,
+        "insurances":              insurances,
+        "receipts":                receipts,
     }
 
 import sqlite3
@@ -384,6 +361,7 @@ def push_to_sqlite(database_path: Path, data: dict):
     try:
         sync_table(cur, "customers", data["customers"], "CustomerId")
         sync_table(cur, "employees", data["employees"], "EmployeeId")
+        sync_table(cur, "customer_employee_links", data["customer_employee_links"], "LinkId")
         sync_table(cur, "insurances", data["insurances"], "FundId")
         sync_table(cur, "receipts", data["receipts"], "ReceiptId")
 
@@ -396,12 +374,37 @@ def push_to_sqlite(database_path: Path, data: dict):
     finally:
         conn.close()
 
-def push_to_sharepoint(data: dict):
+SHAREPOINT_ENDPOINT_LABELS = {
+    "customers":               "Kunden",
+    "insurances":              "Kostenträger",
+    "employees":               "Mitarbeiter",
+    "receipts":                "Belege",
+    "customer_employee_links": "Mitarbeiter-Zuordnungen",
+}
 
-    for endpoint in ("customers", "insurances", "employees", "receipts"):
+
+def push_to_sharepoint(controller, data: dict):
+
+    endpoints = ("customers", "insurances", "employees", "receipts", "customer_employee_links")
+
+    for endpoint in endpoints:
         if endpoint not in data:
             print(f"[WARNING] Missing data for endpoint '{endpoint}'")
             continue
 
-        sp_client.upsert_endpoint(data[endpoint], endpoint=endpoint)
+        label = SHAREPOINT_ENDPOINT_LABELS.get(endpoint, endpoint)
+        controller.gui.set_status(f"Synchronisiere {label} zu SharePoint…")
+
+        # Balken pro Endpoint bei 0 % einblenden; der Callback aktualisiert ihn
+        # während des Sendens auf den tatsächlichen Fortschritt.
+        controller.gui.set_progress(0, 1)
+
+        sp_client.upsert_endpoint(
+            data[endpoint],
+            endpoint=endpoint,
+            progress_callback=controller.gui.set_progress
+        )
+
+        # Endpoint abgeschlossen (auch wenn es nichts zu senden gab → 100 %)
+        controller.gui.set_progress(1, 1)
 

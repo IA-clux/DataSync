@@ -241,6 +241,17 @@ def send_graph_batch(graph_base: str, headers: dict, batch_requests: list[dict])
     batch_url = f"{graph_base}/$batch"
 
     resp = requests.post(batch_url, headers=headers, json=payload)
+
+    # Der $batch-Wrapper selbst kann unter Last gedrosselt werden (429/503).
+    # In diesem Fall NICHT hart abbrechen, sondern als transienten Fehler
+    # signalisieren, damit der gesamte Chunk via Retry-After erneut läuft.
+    if resp.status_code in {429, 503}:
+        retry_after = resp.headers.get("Retry-After")
+        return {
+            "_batch_throttled": True,
+            "retry_after": int(retry_after) if retry_after else 0,
+        }
+
     resp.raise_for_status()
 
     return resp.json()
@@ -249,9 +260,17 @@ def send_batched_requests(
     graph_base: str,
     headers: dict,
     requests_to_send: list[dict],
-    max_retries: int = 6
+    max_retries: int = 6,
+    progress_callback=None
 ):
     pending_requests = list(requests_to_send)
+
+    total = len(requests_to_send)
+    processed = 0
+
+    # Dauerhaft fehlgeschlagene Einzel-Requests (z. B. 400/409/404): werden
+    # gesammelt und übersprungen, statt den gesamten Push abzubrechen.
+    permanent_failures = []
 
     for attempt in range(1, max_retries + 1):
         failed_requests = []
@@ -259,6 +278,15 @@ def send_batched_requests(
 
         for batch_chunk in chunked(pending_requests, 20):
             batch_result = send_graph_batch(graph_base, headers, batch_chunk)
+
+            # Der $batch-Wrapper wurde gedrosselt → kompletten Chunk erneut versuchen.
+            if batch_result.get("_batch_throttled"):
+                failed_requests.extend(batch_chunk)
+                retry_after_seconds = max(
+                    retry_after_seconds,
+                    batch_result.get("retry_after", 0)
+                )
+                continue
 
             requests_by_id = {
                 request["id"]: request
@@ -285,11 +313,26 @@ def send_batched_requests(
                         )
                     continue
 
-                raise RuntimeError(
-                    f"Graph batch subrequest failed: {response}"
+                # Nicht-transienter Fehler eines einzelnen Subrequests:
+                # protokollieren und überspringen (kein Abbruch des Gesamt-Pushes).
+                permanent_failures.append(response)
+                print(
+                    f"[SKIP] Subrequest dauerhaft fehlgeschlagen "
+                    f"(HTTP {status}): {response.get('body')}"
                 )
 
+            # Fortschritt nur im ersten Durchlauf melden (deckt die volle Menge ab);
+            # spätere Retry-Durchläufe betreffen nur kleine Restmengen.
+            if attempt == 1 and progress_callback is not None and total > 0:
+                processed += len(batch_chunk)
+                progress_callback(processed, total)
+
         if not failed_requests:
+            if permanent_failures:
+                print(
+                    f"[WARNING] {len(permanent_failures)} Subrequest(s) dauerhaft "
+                    f"fehlgeschlagen und übersprungen."
+                )
             return
 
         if attempt == max_retries:
@@ -314,7 +357,8 @@ def sync_endpoint(
     access_token: str,
     site_id:      str,
     source_items: list[dict],
-    config:       dict
+    config:       dict,
+    progress_callback=None
 ):
     
     # ------------------------------------------------------------------------------
@@ -398,4 +442,9 @@ def sync_endpoint(
             batch_request_id += 1
 
     all_batch_requests = create_requests + update_requests
-    send_batched_requests(graph_base, headers, all_batch_requests)
+    send_batched_requests(
+        graph_base,
+        headers,
+        all_batch_requests,
+        progress_callback=progress_callback
+    )

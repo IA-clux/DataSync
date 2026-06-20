@@ -1,12 +1,27 @@
 from dotenv import load_dotenv
+from pathlib import Path
 import os
+import sys
 
 from Project.MS365.graph_get_access_token import graph_get_access_token
 from Project.MS365.graph_sync_endpoint    import sync_endpoint
 
 from typing import Literal
 
-load_dotenv()
+
+def _load_env():
+    # In der gepackten Exe (PyInstaller onefile) liegt die .env im
+    # entpackten Bundle-Verzeichnis (sys._MEIPASS); im Entwicklungsbetrieb
+    # wird sie wie gewohnt aus dem Arbeitsverzeichnis geladen.
+    if hasattr(sys, "_MEIPASS"):
+        bundled_env = Path(sys._MEIPASS) / ".env"
+        if bundled_env.exists():
+            load_dotenv(bundled_env)
+            return
+    load_dotenv()
+
+
+_load_env()
 
 class sp_client:
 
@@ -119,6 +134,25 @@ class sp_client:
                 "Source_ExtendedTime": {"type": "text", "multi": False, "max_length": 255},
             }
         },
+        "customer_employee_links": {
+            "list_name": "CustomerEmployeeLinks",
+            "source_id_field": "LinkId",
+            "target_id_column": "Source_LinkId",
+            "title_value": "CustomerEmployeeLink",
+            "fallback_column": {
+                "type": "text",
+                "multi": True
+            },
+            "columns": {
+                "Source_LinkId": {"type": "text", "multi": False, "max_length": 255},
+                "LastSyncAt": {"type": "text", "multi": False, "max_length": 255},
+                "Source_CustomerId": {"type": "text", "multi": False, "max_length": 255},
+                "Source_EmployeeId": {"type": "text", "multi": False, "max_length": 255},
+                "Source_IsPrimary": {"type": "text", "multi": False, "max_length": 255},
+                "Source_IsRepresentative": {"type": "text", "multi": False, "max_length": 255},
+                "Source_CreatedAt": {"type": "text", "multi": False, "max_length": 255},
+            }
+        },
     }
 
 # ---------------------------------------------------------------------------------------------
@@ -126,7 +160,8 @@ class sp_client:
     @staticmethod
     def upsert_endpoint(
         source_data: list[dict],
-        endpoint: Literal["Customers", "Insurances", "Employees", "Receipts"]):
+        endpoint: Literal["customers", "insurances", "employees", "receipts", "customer_employee_links"],
+        progress_callback=None):
 
         selected_config = sp_client.CONFIGS[endpoint]
 
@@ -137,8 +172,9 @@ class sp_client:
         )
 
         sync_endpoint(
-            access_token    = access_token,
-            site_id         = sp_client.SITE_ID,
-            source_items    = source_data,
-            config          = selected_config
+            access_token     = access_token,
+            site_id          = sp_client.SITE_ID,
+            source_items     = source_data,
+            config           = selected_config,
+            progress_callback = progress_callback
         )

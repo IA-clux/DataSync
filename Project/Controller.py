@@ -98,91 +98,75 @@ class Controller:
 
     def update_now(self):
 
-        # --- 1) Button sofort deaktivieren ---
-        self.gui.root.after(0, lambda: self.gui.force_update_btn.config(state="disabled"))
+        # UI sperren und vorherigen Zustand sauber zurücksetzen
+        self.gui.set_busy(True)
+        self.gui.clear_error()
+        self.gui.reset_progress()
+        self.gui.set_status("Vorbereitung…")
 
-        # --- 2) UI vorher resetten ---
-        def prepare_ui():
-            self.gui.error_msg.config(state="normal")
-            self.gui.error_msg.delete("1.0", "end")
-            self.gui.error_msg.config(state="disabled")
+        Thread(target=self._run_sync, daemon=True).start()
 
-            self.gui.customer_progress_lbl.config(text="Lade Kundendaten:")
-            self.gui.employees_progress_lbl.config(text="")
-            self.gui.insurances_progress_lbl.config(text="")
-            self.gui.receipts_progress_lbl.config(text="")
+    def _run_sync(self):
 
-            self.gui.customer_progress.config(text="")
-            self.gui.employees_progress.config(text="")
-            self.gui.insurances_progress.config(text="")
-            self.gui.receipts_progress.config(text="")
+        try:
+            time_before_data_pull = datetime.now()
 
-            self.gui.finished_lbl.config(text="")
+            verifier, challenge = generate_pkce_pair()
+            auth_url = build_authorization_url(challenge)
 
-        self.gui.root.after(0, prepare_ui)
+            # 1) OAuth: Listener starten, per Selenium Redirect auslösen, Code holen
+            self.gui.set_status("Anmeldung bei AlldayCare…")
+            listener = OAuthListenerRunner()
+            listener.start()
 
-        # --- 3) Hintergrund-Thread für das Update ---
-        def worker():
-            try:
-                time_before_data_pull = datetime.now()
-                verifier, challenge = generate_pkce_pair()
-                auth_url = build_authorization_url(challenge)
+            selenium_oauth_login(
+                log          = self.gui.append_error,
+                auth_url     = auth_url,
+                username     = self.SETTINGS["username"],
+                password     = self.SETTINGS["password"],
+                organisation = self.SETTINGS["organisation"],
+                debug_mode   = True
+            )
 
-                # ✅ 1) Listener starten (NICHT blockierend)
-                listener = OAuthListenerRunner()
-                listener.start()
+            code  = listener.wait_for_code()
+            token = exchange_code_for_token(code, verifier)
+            print()  # Hold Console clean!
 
-                # ✅ 2) Selenium triggert OAuth-Redirect
-                selenium_oauth_login(
-                    log          = self.gui.error_msg,
-                    auth_url     = auth_url,
-                    username     = self.SETTINGS["username"],
-                    password     = self.SETTINGS["password"],
-                    organisation = self.SETTINGS["organisation"],
-                    debug_mode   = True
-                )
+            # 2) Daten aus AlldayCare laden
+            data = fetch_all_entities(controller=self, token=token)
 
-                # ✅ 3) Jetzt auf den Redirect warten
-                code = listener.wait_for_code()
-                token = exchange_code_for_token(code, verifier)
-                print() # Hold Console clean!
-                data = fetch_all_entities(
-                    controller = self, 
-                    token      = token)
-                
-                time_after_data_pull = datetime.now()
-                time_needed_to_pull_data = time_after_data_pull - time_before_data_pull
-                output_str = f"{time_needed_to_pull_data.days} Tage, {time_needed_to_pull_data.seconds//3600} Std, {(time_needed_to_pull_data.seconds//60)%60} Min, {time_needed_to_pull_data.seconds%60} Sek"
-                print(f"Time needed to pull Data from AlldayCare: {output_str}", end = "\n\n")
+            time_needed_to_pull_data = datetime.now() - time_before_data_pull
+            output_str = f"{time_needed_to_pull_data.days} Tage, {time_needed_to_pull_data.seconds//3600} Std, {(time_needed_to_pull_data.seconds//60)%60} Min, {time_needed_to_pull_data.seconds%60} Sek"
+            print(f"Time needed to pull Data from AlldayCare: {output_str}", end="\n\n")
 
-                # Push to SQL
-                push_to_sqlite(self._DATABASE_PATH, data)
+            # 3) In lokale SQLite-Datenbank schreiben
+            self.gui.set_status("Speichere in lokale Datenbank…")
+            self.gui.hide_progress()
+            push_to_sqlite(self._DATABASE_PATH, data)
 
-                # Push to SP and measure time needed
-                time_before_sp_push = datetime.now()
-                push_to_sharepoint(data)
-                time_after_sp_push = datetime.now()
-                time_required_for_sharepoint_push = time_after_sp_push - time_before_sp_push
-                output_str = f"{time_required_for_sharepoint_push.days} Tage, {time_required_for_sharepoint_push.seconds//3600} Std, {(time_required_for_sharepoint_push.seconds//60)%60} Min, {time_required_for_sharepoint_push.seconds%60} Sek"
-                print(f"Time needed to synchronize Data to Sharepoint: {output_str}", end = "\n\n")
+            # 4) Nach SharePoint synchronisieren
+            time_before_sp_push = datetime.now()
+            push_to_sharepoint(controller=self, data=data)
+            time_required_for_sharepoint_push = datetime.now() - time_before_sp_push
+            output_str = f"{time_required_for_sharepoint_push.days} Tage, {time_required_for_sharepoint_push.seconds//3600} Std, {(time_required_for_sharepoint_push.seconds//60)%60} Min, {time_required_for_sharepoint_push.seconds%60} Sek"
+            print(f"Time needed to synchronize Data to Sharepoint: {output_str}", end="\n\n")
 
-                # Erfolg: Timestamp aktualisieren
-                self.SETTINGS["last_updated"] = datetime.now()
-                self.save_settings()
-                ts = self.SETTINGS["last_updated"].strftime("%d.%m.%Y %H:%M")
-                self.gui.root.after(0, lambda: self.gui.timer_lbl.config(text=f"Letztes Update: {ts}"))
+            # 5) Erfolg: Timestamp aktualisieren
+            self.SETTINGS["last_updated"] = datetime.now()
+            self.save_settings()
+            ts = self.SETTINGS["last_updated"].strftime("%d.%m.%Y %H:%M")
+            self.gui.root.after(0, lambda: self.gui.timer_lbl.config(text=f"Letztes Update: {ts}"))
 
-            except Exception as e:
-                err = str(e)
-                def write_error():
-                    self.gui.error_msg.config(state="normal")
-                    self.gui.error_msg.insert("end", err)
-                    self.gui.error_msg.config(state="disabled")
-                self.gui.root.after(0, write_error)
+            self.gui.set_status("")
+            self.gui.set_finished("Update erfolgreich abgeschlossen.")
 
-            finally:
-                # --- 4) Button wieder aktivieren & Endmeldung ausgeben ---
-                self.gui.root.after(0, lambda: self.gui.force_update_btn.config(state="normal"))
-                self.gui.root.after(0, lambda: self.gui.finished_lbl.config(text = "Prozess Beendet."))
+        except Exception as e:
+            # Abbruch: Fehlermeldung bleibt eingeblendet (kein clear bis zum nächsten Start)
+            self.gui.set_status("")
+            self.gui.append_error(str(e))
+            self.gui.set_finished("Update fehlgeschlagen.")
 
-        Thread(target=worker, daemon=True).start()
+        finally:
+            # Immer: Fortschrittsbalken ausblenden und UI wieder entsperren
+            self.gui.hide_progress()
+            self.gui.set_busy(False)
