@@ -29,7 +29,9 @@ class sp_client:
     CLIENT_ID     = os.getenv("AZURE_CLIENT_ID")
     CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 
-    SITE_ID = "ihrealltagsbegleiter.sharepoint.com,02199624-2845-496e-9293-80837aa8f58b,7c69ab61-4721-4ceb-ad35-3f0d6e41bf1b"
+    # Root-Kommunikationssite (https://ihrealltagsbegleiter.sharepoint.com).
+    # Format: host,siteCollectionId,webId
+    SITE_ID = "ihrealltagsbegleiter.sharepoint.com,a0acbcb7-e22c-472b-ab07-b48c161770dd,ac32ac83-ae22-4548-9e5e-e7ba3809cdf5"
 
     CONFIGS = {
         "customers": {
@@ -116,6 +118,9 @@ class sp_client:
             "source_id_field": "ReceiptId",
             "target_id_column": "Source_ReceiptId",
             "title_value": "Receipt",
+            # Belege sind quellseitig unveränderlich: nur einfügen (neue IDs) und
+            # löschen (in der Quelle entfernte IDs), kein Feldvergleich/PATCH.
+            "immutable": True,
             "fallback_column": {
                 "type": "text",
                 "multi": True
@@ -161,20 +166,28 @@ class sp_client:
     def upsert_endpoint(
         source_data: list[dict],
         endpoint: Literal["customers", "insurances", "employees", "receipts", "customer_employee_links"],
-        progress_callback=None):
+        progress_callback=None,
+        status_callback=None):
 
         selected_config = sp_client.CONFIGS[endpoint]
 
-        access_token = graph_get_access_token(
-            tenant_id     = sp_client.TENANT_ID,
-            client_id     = sp_client.CLIENT_ID,
-            client_secret = sp_client.CLIENT_SECRET
-        )
+        # Token-Provider statt Einmal-Token: lange Pushs können die Token-Laufzeit
+        # (~60–90 Min) überschreiten; bei 401 wird hierüber frisch nachgeholt.
+        def token_provider():
+            return graph_get_access_token(
+                tenant_id     = sp_client.TENANT_ID,
+                client_id     = sp_client.CLIENT_ID,
+                client_secret = sp_client.CLIENT_SECRET
+            )
+
+        access_token = token_provider()
 
         sync_endpoint(
             access_token     = access_token,
             site_id          = sp_client.SITE_ID,
             source_items     = source_data,
             config           = selected_config,
-            progress_callback = progress_callback
+            progress_callback = progress_callback,
+            status_callback  = status_callback,
+            token_provider   = token_provider
         )
